@@ -7,7 +7,6 @@ readme = "README.md"
 description = "Fetch gemini pages"
 repository = "https://github.com/jsvana/gemini-fetch/"
 license = "MIT"
-license-file = "LICENSE.md"
 keywords = ["gemini"]
 categories = ["api-bindings"]
 
