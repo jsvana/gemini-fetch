@@ -11,14 +11,14 @@ keywords = ["gemini"]
 categories = ["api-bindings"]
 
 [dependencies]
-anyhow = "*"
-itertools = "*"
+anyhow = "1.0"
+itertools = "0.10"
 ring = "0.16"
 rustls = {version = "0.18", features = ["dangerous_configuration"]}
-thiserror = "*"
+thiserror = "1.0"
 tokio = { version = "0.2", features = ["stream", "tcp", "macros", "rt-core", "rt-threaded", "time", "io-util"] }
 tokio-rustls = "0.14"
-url = "*"
+url = "2.2"
 webpki = "0.21"
 webpki-roots = "0.21"
 x509-signature = "0.5"
