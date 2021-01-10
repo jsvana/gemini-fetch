@@ -3,6 +3,13 @@ name = "gemini-fetch"
 version = "0.1.0"
 authors = ["Jay Vana <jaysvana@gmail.com>"]
 edition = "2018"
+readme = "README.md"
+description = "Fetch gemini pages"
+repository = "https://github.com/jsvana/gemini-fetch/"
+license = "MIT"
+license-file = "LICENSE.md"
+keywords = ["gemini"]
+categories = ["api-bindings"]
 
 [dependencies]
 anyhow = "*"
