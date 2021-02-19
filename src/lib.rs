@@ -22,7 +22,7 @@ const REDIRECT_CAP: usize = 5;
 ///
 /// See https://gemini.circumlunar.space/docs/specification.html
 /// for more information.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Status {
     // 10
     Input,
@@ -100,7 +100,7 @@ impl FromStr for Status {
 ///
 /// See https://gemini.circumlunar.space/docs/specification.html
 /// for more information.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Header {
     /// Header's status
     pub status: Status,
