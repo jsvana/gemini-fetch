@@ -145,7 +145,7 @@ impl FromStr for Header {
 #[derive(Debug)]
 pub struct Page {
     /// Page's URL
-    pub url: String,
+    pub url: Url,
 
     /// Page's single header
     pub header: Header,
@@ -318,39 +318,34 @@ async fn build_tls_config<'a>(
 
 #[derive(Debug, Error)]
 pub enum FetchPageError {
-    #[error("unsupported scheme for feed \"{0}\", only gemini is supported")]
+    #[error("unsupported scheme \"{0}\", only gemini is supported")]
     UnsupportedScheme(String),
-    #[error("missing host in feed \"{0}\"")]
+    #[error("missing host in URL \"{0}\"")]
     MissingHost(String),
-    #[error("failed to resolve feed \"{0}\"")]
+    #[error("failed to resolve URL \"{0}\"")]
     FailedToResolve(String),
     #[error("response is missing its header")]
     MissingHeader,
 }
 
 impl Page {
-    /// Fetch the given Gemini link
+    /// Fetch the given Gemini link.
     ///
-    /// Does not follow redirects or other status codes
-    pub async fn fetch(
-        full_url: String,
-        tls_validation: Option<ServerTLSValidation>,
-    ) -> Result<Page> {
-        let feed_url = Url::parse(&full_url)?;
-
-        if feed_url.scheme() != "gemini" {
-            return Err(FetchPageError::UnsupportedScheme(full_url.to_string()).into());
+    /// Does not follow redirects or other status codes.
+    pub async fn fetch(url: &Url, tls_validation: Option<ServerTLSValidation>) -> Result<Page> {
+        if url.scheme() != "gemini" {
+            return Err(FetchPageError::UnsupportedScheme(url.to_string()).into());
         }
 
-        let host = feed_url
+        let host = url
             .host_str()
-            .ok_or_else(|| FetchPageError::MissingHost(full_url.to_string()))?;
-        let port = feed_url.port().unwrap_or(1965);
+            .ok_or_else(|| FetchPageError::MissingHost(url.to_string()))?;
+        let port = url.port().unwrap_or(1965);
 
         let addr = format!("{}:{}", host, port)
             .to_socket_addrs()?
             .next()
-            .ok_or_else(|| FetchPageError::FailedToResolve(full_url.to_string()))?;
+            .ok_or_else(|| FetchPageError::FailedToResolve(url.to_string()))?;
 
         let dns_name = DNSNameRef::try_from_ascii_str(&host)?;
         let socket = TcpStream::connect(&addr).await?;
@@ -358,9 +353,7 @@ impl Page {
 
         let mut socket = config.connect(dns_name, socket).await?;
 
-        socket
-            .write_all(format!("{}\r\n", full_url).as_bytes())
-            .await?;
+        socket.write_all(format!("{}\r\n", url).as_bytes()).await?;
 
         let mut data = Vec::new();
         socket.read_to_end(&mut data).await?;
@@ -376,24 +369,24 @@ impl Page {
         let body = response_lines.join("\n");
 
         Ok(Page {
-            url: full_url,
+            url: url.clone(),
             header,
             body: if body.is_empty() { None } else { Some(body) },
         })
     }
 
     /// Fetch the given Gemini link while following redirects
-    pub async fn fetch_and_handle_redirects(full_url: String) -> Result<Page> {
-        let mut url_to_fetch = full_url;
+    pub async fn fetch_and_handle_redirects(url: &Url) -> Result<Page> {
+        let mut url = url.clone();
 
         let mut attempts = 0;
         while attempts < REDIRECT_CAP {
             // TODO: verification
-            let page = Page::fetch(url_to_fetch, None).await?;
+            let page = Page::fetch(&url, None).await?;
 
             if let Status::TemporaryRedirect | Status::PermanentRedirect = page.header.status {
                 attempts += 1;
-                url_to_fetch = page.header.meta;
+                url = Url::parse(&page.header.meta)?;
             } else {
                 return Ok(page);
             }
