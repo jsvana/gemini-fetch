@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 // TODO: make this use all specific thiserror errors
 use anyhow::{format_err, Result};
-use itertools::Itertools;
 use rustls::{
     Certificate, ClientConfig, RootCertStore, ServerCertVerified, ServerCertVerifier, TLSError,
 };
@@ -374,15 +373,14 @@ impl Page {
         let mut data = Vec::new();
         socket.read_to_end(&mut data).await?;
 
-        let response = String::from_utf8(data)?;
-        let mut response_lines = response.lines();
+        let mut response = String::from_utf8(data)?.replace("\r\n", "\n");
 
-        let header: Header = response_lines
-            .next()
-            .ok_or(FetchPageError::MissingHeader)?
-            .parse()?;
-
-        let body = response_lines.join("\n");
+        let (header, body) = if let Some(i) = response.find('\n') {
+            let remainder = response.split_off(i + 1);
+            (response.parse::<Header>()?, remainder)
+        } else {
+            return Err(FetchPageError::MissingHeader.into());
+        };
 
         Ok(Page {
             url: url.clone(),
