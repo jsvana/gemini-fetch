@@ -244,7 +244,7 @@ impl ServerCertVerifier for ExpectSelfSignedVerifier {
             } else {
                 return verify_selfsigned_certificate(&presented_certs[0], dns_name, now)
                     .map_err(map_sig_to_webpki_err)
-                    .map_err(|e| rustls::TLSError::WebPKIError(e));
+                    .map_err(rustls::TLSError::WebPKIError);
             }
         }
 
@@ -274,7 +274,7 @@ impl ServerCertVerifier for PossiblySelfSignedVerifier {
             let verified =
                 verify_selfsigned_certificate(&presented_certs[0], dns_name, unix_now()?)
                     .map_err(map_sig_to_webpki_err)
-                    .map_err(|e| TLSError::WebPKIError(e))?;
+                    .map_err(TLSError::WebPKIError)?;
 
             return Ok(verified);
         }
