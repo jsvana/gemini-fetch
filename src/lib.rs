@@ -1,5 +1,5 @@
 use std::convert::TryFrom;
-use std::net::ToSocketAddrs;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -333,6 +333,28 @@ impl Page {
     ///
     /// Does not follow redirects or other status codes.
     pub async fn fetch(url: &Url, tls_validation: Option<ServerTLSValidation>) -> Result<Page> {
+        let host = url
+            .host_str()
+            .ok_or_else(|| FetchPageError::MissingHost(url.to_string()))?;
+
+        let port = url.port().unwrap_or(1965);
+
+        let addr = format!("{}:{}", host, port)
+            .to_socket_addrs()?
+            .next()
+            .ok_or_else(|| FetchPageError::FailedToResolve(url.to_string()))?;
+
+        Self::fetch_from(url, addr, tls_validation).await
+    }
+
+    /// Fetch the given Gemini link from the specified socket address (e.g. a proxy).
+    ///
+    /// Does not follow redirects or other status codes.
+    pub async fn fetch_from(
+        url: &Url,
+        addr: SocketAddr,
+        tls_validation: Option<ServerTLSValidation>,
+    ) -> Result<Page> {
         if url.scheme() != "gemini" {
             return Err(FetchPageError::UnsupportedScheme(url.to_string()).into());
         }
@@ -340,12 +362,6 @@ impl Page {
         let host = url
             .host_str()
             .ok_or_else(|| FetchPageError::MissingHost(url.to_string()))?;
-        let port = url.port().unwrap_or(1965);
-
-        let addr = format!("{}:{}", host, port)
-            .to_socket_addrs()?
-            .next()
-            .ok_or_else(|| FetchPageError::FailedToResolve(url.to_string()))?;
 
         let dns_name = DNSNameRef::try_from_ascii_str(&host)?;
         let socket = TcpStream::connect(&addr).await?;
