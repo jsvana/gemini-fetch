@@ -122,7 +122,7 @@ impl FromStr for Header {
     type Err = ParseHeaderError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.trim().split(' ').collect();
+        let parts: Vec<&str> = s.trim().splitn(2, ' ').collect();
 
         let status: Status = parts
             .get(0)
