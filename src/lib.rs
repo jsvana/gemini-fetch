@@ -1,11 +1,10 @@
 use std::convert::TryFrom;
-use std::net::ToSocketAddrs;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::Arc;
 
 // TODO: make this use all specific thiserror errors
 use anyhow::{format_err, Result};
-use itertools::Itertools;
 use rustls::{
     Certificate, ClientConfig, RootCertStore, ServerCertVerified, ServerCertVerifier, TLSError,
 };
@@ -22,7 +21,7 @@ const REDIRECT_CAP: usize = 5;
 ///
 /// See https://gemini.circumlunar.space/docs/specification.html
 /// for more information.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Status {
     // 10
     Input,
@@ -100,7 +99,7 @@ impl FromStr for Status {
 ///
 /// See https://gemini.circumlunar.space/docs/specification.html
 /// for more information.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Header {
     /// Header's status
     pub status: Status,
@@ -145,7 +144,7 @@ impl FromStr for Header {
 #[derive(Debug)]
 pub struct Page {
     /// Page's URL
-    pub url: String,
+    pub url: Url,
 
     /// Page's single header
     pub header: Header,
@@ -244,7 +243,7 @@ impl ServerCertVerifier for ExpectSelfSignedVerifier {
             } else {
                 return verify_selfsigned_certificate(&presented_certs[0], dns_name, now)
                     .map_err(map_sig_to_webpki_err)
-                    .map_err(|e| rustls::TLSError::WebPKIError(e));
+                    .map_err(rustls::TLSError::WebPKIError);
             }
         }
 
@@ -274,7 +273,7 @@ impl ServerCertVerifier for PossiblySelfSignedVerifier {
             let verified =
                 verify_selfsigned_certificate(&presented_certs[0], dns_name, unix_now()?)
                     .map_err(map_sig_to_webpki_err)
-                    .map_err(|e| TLSError::WebPKIError(e))?;
+                    .map_err(TLSError::WebPKIError)?;
 
             return Ok(verified);
         }
@@ -318,39 +317,50 @@ async fn build_tls_config<'a>(
 
 #[derive(Debug, Error)]
 pub enum FetchPageError {
-    #[error("unsupported scheme for feed \"{0}\", only gemini is supported")]
+    #[error("unsupported scheme \"{0}\", only gemini is supported")]
     UnsupportedScheme(String),
-    #[error("missing host in feed \"{0}\"")]
+    #[error("missing host in URL \"{0}\"")]
     MissingHost(String),
-    #[error("failed to resolve feed \"{0}\"")]
+    #[error("failed to resolve URL \"{0}\"")]
     FailedToResolve(String),
     #[error("response is missing its header")]
     MissingHeader,
 }
 
 impl Page {
-    /// Fetch the given Gemini link
+    /// Fetch the given Gemini link.
     ///
-    /// Does not follow redirects or other status codes
-    pub async fn fetch(
-        full_url: String,
-        tls_validation: Option<ServerTLSValidation>,
-    ) -> Result<Page> {
-        let feed_url = Url::parse(&full_url)?;
-
-        if feed_url.scheme() != "gemini" {
-            return Err(FetchPageError::UnsupportedScheme(full_url.to_string()).into());
-        }
-
-        let host = feed_url
+    /// Does not follow redirects or other status codes.
+    pub async fn fetch(url: &Url, tls_validation: Option<ServerTLSValidation>) -> Result<Page> {
+        let host = url
             .host_str()
-            .ok_or_else(|| FetchPageError::MissingHost(full_url.to_string()))?;
-        let port = feed_url.port().unwrap_or(1965);
+            .ok_or_else(|| FetchPageError::MissingHost(url.to_string()))?;
+
+        let port = url.port().unwrap_or(1965);
 
         let addr = format!("{}:{}", host, port)
             .to_socket_addrs()?
             .next()
-            .ok_or_else(|| FetchPageError::FailedToResolve(full_url.to_string()))?;
+            .ok_or_else(|| FetchPageError::FailedToResolve(url.to_string()))?;
+
+        Self::fetch_from(url, addr, tls_validation).await
+    }
+
+    /// Fetch the given Gemini link from the specified socket address (e.g. a proxy).
+    ///
+    /// Does not follow redirects or other status codes.
+    pub async fn fetch_from(
+        url: &Url,
+        addr: SocketAddr,
+        tls_validation: Option<ServerTLSValidation>,
+    ) -> Result<Page> {
+        if url.scheme() != "gemini" {
+            return Err(FetchPageError::UnsupportedScheme(url.to_string()).into());
+        }
+
+        let host = url
+            .host_str()
+            .ok_or_else(|| FetchPageError::MissingHost(url.to_string()))?;
 
         let dns_name = DNSNameRef::try_from_ascii_str(&host)?;
         let socket = TcpStream::connect(&addr).await?;
@@ -358,42 +368,39 @@ impl Page {
 
         let mut socket = config.connect(dns_name, socket).await?;
 
-        socket
-            .write_all(format!("{}\r\n", full_url).as_bytes())
-            .await?;
+        socket.write_all(format!("{}\r\n", url).as_bytes()).await?;
 
         let mut data = Vec::new();
         socket.read_to_end(&mut data).await?;
 
-        let response = String::from_utf8(data)?;
-        let mut response_lines = response.lines();
+        let mut response = String::from_utf8(data)?.replace("\r\n", "\n");
 
-        let header: Header = response_lines
-            .next()
-            .ok_or(FetchPageError::MissingHeader)?
-            .parse()?;
-
-        let body = response_lines.join("\n");
+        let (header, body) = if let Some(i) = response.find('\n') {
+            let remainder = response.split_off(i + 1);
+            (response.parse::<Header>()?, remainder)
+        } else {
+            return Err(FetchPageError::MissingHeader.into());
+        };
 
         Ok(Page {
-            url: full_url,
+            url: url.clone(),
             header,
             body: if body.is_empty() { None } else { Some(body) },
         })
     }
 
     /// Fetch the given Gemini link while following redirects
-    pub async fn fetch_and_handle_redirects(full_url: String) -> Result<Page> {
-        let mut url_to_fetch = full_url;
+    pub async fn fetch_and_handle_redirects(url: &Url) -> Result<Page> {
+        let mut url = url.clone();
 
         let mut attempts = 0;
         while attempts < REDIRECT_CAP {
             // TODO: verification
-            let page = Page::fetch(url_to_fetch, None).await?;
+            let page = Page::fetch(&url, None).await?;
 
             if let Status::TemporaryRedirect | Status::PermanentRedirect = page.header.status {
                 attempts += 1;
-                url_to_fetch = page.header.meta;
+                url = Url::parse(&page.header.meta)?;
             } else {
                 return Ok(page);
             }
